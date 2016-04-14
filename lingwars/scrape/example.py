@@ -5,6 +5,7 @@ import re
 import json
 import time
 from lxml import html, etree
+from builtins import str
 
 
 def download(url):
@@ -33,7 +34,19 @@ def parse_new_urls(tree, done_urls, pattern=None):
     return new_urls
 
 
-def parse_content(tree, filename=None, meta=None):
+def parse_content(tree, outdir=None, meta=None):
+    filename = None
+    if outdir:
+        # Prepare output: directory and filename
+        directory = os.path.join(outdir, meta['year'], meta['month'])
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+        filename = os.path.join(directory, meta['uuid'] + '.json')
+        
+        # If it is already parsed (and stored)
+        if os.path.exists(filename):
+            return
+        
     # XPath strings are adapted for a detail view @ El Mundo 
     data = {}
     xpath_string = {'title': "//article/h1[@itemprop='headline']/text()",
@@ -42,24 +55,26 @@ def parse_content(tree, filename=None, meta=None):
                     'location': "//footer/ul/li[@itemprop='address']//text()",
                     'datetime': "//article/div[@itemprop='articleBody']/time//text()",
                     'content': "//article/div[@itemprop='articleBody']/p[not(@class='summary-lead')]//text()",
+                    'tags': "/html/head/meta[@name='keywords']/@content",
                     }
                
-    for key,value in xpath_string.iteritems():
+    for key,value in xpath_string.items():
         try:
             item = tree.xpath(value)
-            if not isinstance(item, basestring):
+            if not isinstance(item, str):
                 if key == 'summary':
-                    item = '. '.join(item).strip()
+                    item = '. '.join(map(str, item)).strip()
                 else:
-                    item = ''.join(item).strip()
+                    item = ''.join(map(str, item)).strip()
             data[key] = item.strip()
-        except Exception:
+        except Exception as e:
+            sys.stderr.write("\t xpath error: {}\n".format(str(e)))
             pass
     
     if filename and any(data.values()):
         data.update(meta)
         with open(filename, 'w') as f:
-            f.write(json.dumps(data, indent=4, ensure_ascii=False).encode('utf8'))
+            f.write(json.dumps(data, indent=4, ensure_ascii=False))
     
     return data
 
@@ -75,23 +90,23 @@ def parse_recursive(init_url, content_pattern=None, visit_pattern=None, output_d
             # Download content
             page = download(url)
             
-            # Get new URLs
-            tree = html.fromstring(page.content)
-            new_urls = parse_new_urls(tree, done, visit_pattern)
-            urls.update(new_urls)
-            
-            if not content_pattern or any([p.match(url) for p in content_pattern]):
-                # Data from url
-                url_pattern = re.compile('https?:\/\/(www.)?elmundo.es\/internacional\/(?P<year>\d{4})\/(?P<month>\d{2})\/(?P<day>\d{2})\/(?P<uuid>[\d\w]+).html')
-                meta = url_pattern.match(url).groupdict()
-                filename = os.path.join(output_dir, meta['uuid'] + '.json')
-                # Parse content
-                parse_content(tree, filename, meta)
+            if page:
+                # Get new URLs
+                tree = html.fromstring(page.content)
+                new_urls = parse_new_urls(tree, done, visit_pattern)
+                urls.update(new_urls)
+                
+                if not content_pattern or any([p.match(url) for p in content_pattern]):
+                    # Data from url
+                    url_pattern = re.compile('https?:\/\/(www.)?elmundo.es\/internacional\/(?P<year>\d{4})\/(?P<month>\d{2})\/(?P<day>\d{2})\/(?P<uuid>[\d\w]+).html')
+                    meta = url_pattern.match(url).groupdict()
+                    meta.update({'url': url})
+                    # Parse content
+                    parse_content(tree, output_dir, meta)
 
         except KeyboardInterrupt:
             sys.stdout.write(">> User interrupt! Exit gracefully.")
-            return
-            
+            return            
         except Exception as e:
             sys.stderr.write("\t error: {}\n".format(str(e)))
         
@@ -122,7 +137,7 @@ if __name__ == '__main__':
     
     content_pattern = [re.compile('https?:\/\/(www.)?elmundo.es\/internacional\/(?P<year>\d{4})\/(?P<month>\d{2})\/(?P<day>\d{2})\/(?P<uuid>[\d\w]+).html'),]
     visit_pattern = [re.compile('https?:\/\/(www.)?elmundo.es\/internacional.*'),]
-    output_dir = os.path.join(os.path.dirname(__file__), 'done')
+    output_dir = os.path.join(os.path.dirname(__file__), 'internacional')
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
     parse_recursive(url, content_pattern, visit_pattern, output_dir)
